@@ -26,7 +26,7 @@ Shows a *"last seen X ago"* label below usernames in the member list and in righ
 
 ## 📸 Screenshot (Preview)
 
-![Screenshot](https://cdn.discordapp.com/attachments/1441220061602779147/1496233093307306156/image.png?ex=69e92328&is=69e7d1a8&hm=bab594eeb57914c25f6a70f7574a4ca73b8563fdd3022b80b64700af55e91f2d&)
+![Screenshot](https://cdn.discordapp.com/attachments/1441220061602779147/1496257739394126027/image.png?ex=69e93a1c&is=69e7e89c&hm=e2b7ce662eb5a6fa826707a152d5e7d0bfe30e12cec1988fcd6f0c6a61ce1bfc&)
 
 ![Screenshot](https://cdn.discordapp.com/attachments/1441220061602779147/1496236359118094346/image.png?ex=69e92632&is=69e7d4b2&hm=13be507030f34593aa4c127cd4396dd004a8a826a5490b62ad1434777de780b5&)
 
