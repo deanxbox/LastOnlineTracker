@@ -144,7 +144,7 @@ function menuPatch(_: string, children: any[], props: any) {
 export default definePlugin({
     name: "LastOnlineTracker",
     description: "Shows when offline users were last online. resets when u restart discord",
-    authors: [{ name: "mubashir", id: 641266820187160576n }],
+    authors: [{ name: "k1ng_op", id: 641266820187160576n }],
     dependencies: ["MemberListDecoratorsAPI", "ContextMenuAPI"],
 
     patches: [
