@@ -15,7 +15,6 @@ const PresenceStore = findByPropsLazy("getStatus", "getActivities");
 
 const lastSeenMap   = new Map<string, number>();
 const seenOnlineSet = new Set<string>();
-let   _propsLogged  = false;
 
 function ago(ms: number): string {
     const s = Math.floor(ms / 1000);
@@ -33,22 +32,20 @@ function isOffline(userId: string): boolean {
     catch { return true; }
 }
 
-// Shared style — identical to Discord's own "Active X ago"
+// Matches Discord's "Active X ago" style exactly
 const subStyle: React.CSSProperties = {
-    display:      "block",
-    fontSize:     "12px",
-    fontWeight:   400,
-    lineHeight:   "16px",
-    color:        "var(--text-muted)",
-    overflow:     "hidden",
-    whiteSpace:   "nowrap",
-    textOverflow: "ellipsis",
-    userSelect:   "none",
+    display: "block", fontSize: "12px", fontWeight: 400,
+    lineHeight: "16px", color: "var(--text-muted)",
+    overflow: "hidden", whiteSpace: "nowrap",
+    textOverflow: "ellipsis", userSelect: "none",
 };
 
 function LastSeenText({ userId }: { userId: string; }) {
     const [, tick] = React.useReducer(n => n + 1, 0);
-    React.useEffect(() => { const t = setInterval(tick, 30_000); return () => clearInterval(t); }, []);
+    React.useEffect(() => {
+        const t = setInterval(tick, 30_000);
+        return () => clearInterval(t);
+    }, []);
     if (!isOffline(userId)) return null;
     const ts = lastSeenMap.get(userId);
     if (!ts) return null;
@@ -78,51 +75,44 @@ const ctxPatch = (_navId: string, children: any[], props: any) => {
 
 export default definePlugin({
     name: "LastOnlineTracker",
-    description: "Shows 'Active X ago' below usernames in DM list and member list, matching Discord's style. Resets on restart.",
-    authors: [{ name: "You", id: 0n }],
+    description: "Shows 'Active X ago' below usernames in DM list, matching Discord's style exactly. Resets on restart.",
+    authors: [{ name: "k1ng_op", id: 641266820187160576 }],
     dependencies: ["MemberListDecoratorsAPI", "ContextMenuAPI"],
 
     patches: [
-        // ── DM list left sidebar ─────────────────────────────────────────────
-        // Module 149741: renders each DM row. Props object is `e`,
-        // secondaryText is aliased to `d`, passed as subText:d into the row.
-        // We intercept subText:d and pass the full props `e` so we can
-        // extract the userId from whatever field Discord stores it in.
+        // ── DM list left sidebar (module 696157) ─────────────────────────────
+        // `t` = the channel object. `t.recipients[0]` = the other user's ID.
+        // We capture the full original ternary expression for `subText` so we
+        // can fall back to it for system DMs and group DMs.
         {
-            find: "friendsWidgetRowRecentlyAdded",
+            find: "isSystemDM()",
             replacement: {
-                match: /subText:(\w+),hovered/,
-                replace: "subText:$self.dmSubtext($1,e),hovered",
+                // Captures: $1 = channel variable name (e.g. "t")
+                //           $2 = rest of the ternary after isSystemDM()
+                // Stops at ,highlighted: which always follows subText in this component.
+                match: /subText:(\w+)\.isSystemDM\(\)([\s\S]+?),highlighted:/,
+                replace: "subText:$self.dmSubtext($1,$1.isSystemDM()$2),highlighted:",
             },
             optional: true,
         },
     ],
 
-    // Called from the patched DM row render.
-    // `original` = Discord's own secondaryText (e.g. "Active 5m ago") or null.
-    // `props`    = the full component props object `e`.
-    dmSubtext(original: React.ReactNode, props: any): React.ReactNode {
-        // Log props keys once so we can see what's available in DevTools.
-        if (!_propsLogged) {
-            _propsLogged = true;
-            console.log("[LastOnlineTracker] DM row props keys:", Object.keys(props ?? {}), props);
-        }
+    // channel    = the Discord channel object (has .recipients[], .isSystemDM(), .isGroupDM())
+    // original   = the evaluated result of Discord's own subText expression
+    dmSubtext(channel: any, original: React.ReactNode): React.ReactNode {
+        // For system DMs or group DMs, keep Discord's own text
+        if (!channel || channel.isSystemDM?.() || channel.isGroupDM?.()) return original ?? null;
 
-        // Try every known field that might carry the userId.
-        const userId: string | undefined =
-            props?.user?.id          ??
-            props?.userId            ??
-            props?.recipient?.id     ??
-            props?.channel?.recipients?.[0];
+        const userId: string = channel.recipients?.[0];
+        if (!userId) return original ?? null;
 
-        // If we have no userId or user is currently online, show Discord's original text.
-        if (!userId || !isOffline(userId)) return original ?? null;
+        // User is currently online — Discord's own "Active X ago" takes over
+        if (!isOffline(userId)) return original ?? null;
 
         const ts = lastSeenMap.get(userId);
-        // No tracked data yet — show Discord's original text if any.
-        if (!ts) return original ?? null;
+        // Not tracked yet this session — show nothing rather than Discord's stale text
+        if (!ts) return null;
 
-        // Show our "Active X ago" in place of Discord's subtext.
         return <LastSeenText key="lot-dm" userId={userId} />;
     },
 
@@ -151,7 +141,7 @@ export default definePlugin({
     },
 
     start() {
-        // Right-side member list decorator (confirmed working)
+        // Right-side member list decorator — confirmed working
         addMemberListDecorator("LastOnlineTracker", props => {
             const user = (props as any).user;
             if (!user?.id || !isOffline(user.id)) return null;
@@ -174,6 +164,5 @@ export default definePlugin({
         removeContextMenuPatch("gdm-context", ctxPatch);
         lastSeenMap.clear();
         seenOnlineSet.clear();
-        _propsLogged = false;
     },
 });
