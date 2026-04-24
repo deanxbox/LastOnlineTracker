@@ -1,6 +1,7 @@
 /*
- * LastOnlineTracker - tracks when ppl go offline
- * by Mubashir
+ * Vencord, a Discord client mod
+ * Copyright (c) 2024 Vendicated and contributors
+ * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
 import definePlugin from "@utils/types";
@@ -10,201 +11,158 @@ import { addContextMenuPatch, removeContextMenuPatch, findGroupChildrenByChildId
 import { addMemberListDecorator, removeMemberListDecorator } from "@api/MemberListDecorators";
 import { Menu } from "@webpack/common";
 
-const presence = findByPropsLazy("getStatus", "getActivities");
+const PresenceStore = findByPropsLazy("getStatus", "getActivities");
 
-const offlineTimes = new Map<string, number>();
-const wasOnline = new Set<string>();
+const lastSeenMap   = new Map<string, number>();
+const seenOnlineSet = new Set<string>();
 
-function formatTime(ms: number) {
-    const sec = Math.floor(ms / 1000);
-    if (sec < 60) return "just now";
-
-    const min = Math.floor(sec / 60);
-    if (min < 60) return `${min}m ago`;
-
-    const hr = Math.floor(min / 60);
-    if (hr < 24) return `${hr}h ago`;
-
-    const day = Math.floor(hr / 24);
-    if (day < 7) return `${day}d ago`;
-
-    return `${Math.floor(day / 7)}w ago`;
+function ago(ms: number): string {
+    const s = Math.floor(ms / 1000);
+    if (s < 60) return `${s}s ago`;
+    const m = Math.floor(s / 60);
+    if (m < 60) return `${m}m ago`;
+    const h = Math.floor(m / 60);
+    if (h < 24) return `${h}h ago`;
+    const d = Math.floor(h / 24);
+    return d < 7 ? `${d}d ago` : `${Math.floor(d / 7)}w ago`;
 }
 
-function isOffline(id: string) {
-    try {
-        return (presence.getStatus(id) ?? "offline") === "offline";
-    } catch {
-        return false;
-    }
+function isOffline(userId: string): boolean {
+    try { return (PresenceStore.getStatus(userId) ?? "offline") === "offline"; }
+    catch { return true; }
 }
 
-function Clock() {
-    return (
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-            <circle cx="12" cy="12" r="10" />
-            <polyline points="12 6 12 12 16 14" />
-        </svg>
-    );
-}
+// Matches Discord's "Active X ago" style exactly
+const subStyle: React.CSSProperties = {
+    display: "block", fontSize: "12px", fontWeight: 400,
+    lineHeight: "16px", color: "var(--text-muted)",
+    overflow: "hidden", whiteSpace: "nowrap",
+    textOverflow: "ellipsis", userSelect: "none",
+};
 
-// rerender every minute so the time updates
-function useTick() {
-    const [, tick] = React.useReducer((x: number) => x + 1, 0);
+function LastSeenText({ userId }: { userId: string; }) {
+    const [, tick] = React.useReducer(n => n + 1, 0);
     React.useEffect(() => {
-        const id = setInterval(tick, 60000);
-        return () => clearInterval(id);
+        const t = setInterval(tick, 30_000);
+        return () => clearInterval(t);
     }, []);
-}
-
-function Subtext({ userId }: { userId?: string }) {
-    useTick();
-    if (!userId || !isOffline(userId)) return null;
-
-    const ts = offlineTimes.get(userId);
+    if (!isOffline(userId)) return null;
+    const ts = lastSeenMap.get(userId);
     if (!ts) return null;
-
-    return (
-        <div
-            title={`Last online: ${new Date(ts).toLocaleString()}`}
-            style={{
-                display: "flex",
-                alignItems: "center",
-                gap: "4px",
-                fontSize: "12px",
-                lineHeight: "16px",
-                color: "var(--text-muted)",
-                marginTop: "2px",
-                overflow: "hidden",
-                whiteSpace: "nowrap",
-                textOverflow: "ellipsis",
-                userSelect: "none"
-            }}
-        >
-            <Clock />
-            <span>last seen {formatTime(Date.now() - ts)}</span>
-        </div>
-    );
+    return <span style={subStyle}>Active {ago(Date.now() - ts)}</span>;
 }
 
-function Pill({ user }: { user?: { id: string } }) {
-    useTick();
-    if (!user?.id || !isOffline(user.id)) return null;
-
-    const ts = offlineTimes.get(user.id);
-    if (!ts) return null;
-
-    return (
-        <span
-            title={`Last online: ${new Date(ts).toLocaleString()}`}
-            style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: "3px",
-                fontSize: "11px",
-                fontWeight: 500,
-                color: "var(--text-muted)",
-                background: "var(--background-secondary)",
-                borderRadius: "8px",
-                padding: "2px 6px",
-                marginLeft: "4px",
-                whiteSpace: "nowrap",
-                userSelect: "none"
-            }}
-        >
-            <Clock />
-            {formatTime(Date.now() - ts)}
-        </span>
-    );
-}
-
-function menuPatch(_: string, children: any[], props: any) {
-    const id = props?.user?.id ?? props?.guildMember?.userId;
-    if (!id || !isOffline(id)) return;
-
-    const ts = offlineTimes.get(id);
+// ─── Context menu ─────────────────────────────────────────────────────────────
+const ctxPatch = (_navId: string, children: any[], props: any) => {
+    const userId: string | undefined = props?.user?.id ?? props?.guildMember?.userId;
+    if (!userId || !isOffline(userId)) return;
+    const ts = lastSeenMap.get(userId);
     if (!ts) return;
-
     const group = findGroupChildrenByChildId("user-profile", children)
         ?? findGroupChildrenByChildId("mark-as-read", children)
         ?? children;
-
     group.push(
         <Menu.MenuSeparator key="lot-sep" />,
         <Menu.MenuItem
-            key="lot-item"
-            id="lot-item"
-            label={`Last seen ${formatTime(Date.now() - ts)}`}
-            subtext={new Date(ts).toLocaleString()}
+            key="lot-lastseen"
+            id="lot-lastseen"
+            label={`Active ${ago(Date.now() - ts)}`}
+            subtext={`Last online: ${new Date(ts).toLocaleString()}`}
             disabled
         />
     );
-}
+};
 
 export default definePlugin({
     name: "LastOnlineTracker",
-    description: "Shows when offline users were last online. resets when u restart discord",
-    authors: [{ name: "k1ng_op", id: 641266820187160576n }],
+    description: "Shows 'Active X ago' below usernames in DM list, matching Discord's style exactly. Resets on restart.",
+    authors: [{ name: "k1ng_op", id: 641266820187160576 }],
     dependencies: ["MemberListDecoratorsAPI", "ContextMenuAPI"],
 
     patches: [
+        // ── DM list left sidebar (module 696157) ─────────────────────────────
+        // `t` = the channel object. `t.recipients[0]` = the other user's ID.
+        // We capture the full original ternary expression for `subText` so we
+        // can fall back to it for system DMs and group DMs.
         {
-            find: ".nameAndDecorators",
+            find: "isSystemDM()",
             replacement: {
-                match: /(nameAndDecorators[^}]*?children:\[)([^\]]*?)(\])/,
-                replace: (_, a, b, c) => `${a}${b}${c},$self.renderSubtext(arguments[0])`
+                // Captures: $1 = channel variable name (e.g. "t")
+                //           $2 = rest of the ternary after isSystemDM()
+                // Stops at ,highlighted: which always follows subText in this component.
+                match: /subText:(\w+)\.isSystemDM\(\)([\s\S]+?),highlighted:/,
+                replace: "subText:$self.dmSubtext($1,$1.isSystemDM()$2),highlighted:",
             },
-            noWarn: true
-        }
+            optional: true,
+        },
     ],
 
-    renderSubtext(props: any) {
-        const id = props?.user?.id
-            ?? props?.member?.userId
-            ?? props?.guildMember?.userId
-            ?? props?.channel?.recipients?.[0];
+    // channel    = the Discord channel object (has .recipients[], .isSystemDM(), .isGroupDM())
+    // original   = the evaluated result of Discord's own subText expression
+    dmSubtext(channel: any, original: React.ReactNode): React.ReactNode {
+        // For system DMs or group DMs, keep Discord's own text
+        if (!channel || channel.isSystemDM?.() || channel.isGroupDM?.()) return original ?? null;
 
-        return <Subtext key="lot-sub" userId={id} />;
+        const userId: string = channel.recipients?.[0];
+        if (!userId) return original ?? null;
+
+        // User is currently online — Discord's own "Active X ago" takes over
+        if (!isOffline(userId)) return original ?? null;
+
+        const ts = lastSeenMap.get(userId);
+        // Not tracked yet this session — show nothing rather than Discord's stale text
+        if (!ts) return null;
+
+        return <LastSeenText key="lot-dm" userId={userId} />;
     },
 
     flux: {
-        PRESENCE_UPDATES({ updates }: any) {
+        PRESENCE_UPDATES({ updates }: {
+            updates?: Array<{
+                user:          { id: string };
+                status:        string;
+                clientStatus?: Record<string, string>;
+            }>;
+        }) {
             if (!Array.isArray(updates)) return;
-
-            for (const u of updates) {
-                const id = u.user?.id;
-                if (!id) continue;
-
-                const fullyOffline = u.status === "offline"
-                    && (!u.clientStatus || Object.keys(u.clientStatus).length === 0);
-
+            for (const { user, status, clientStatus } of updates) {
+                const fullyOffline =
+                    status === "offline" &&
+                    (!clientStatus || Object.keys(clientStatus).length === 0);
                 if (!fullyOffline) {
-                    wasOnline.add(id);
-                    offlineTimes.delete(id);
-                    continue;
-                }
-
-                // only save if we actually saw them online before
-                // otherwise discord floods us with offline ppl on startup
-                if (wasOnline.has(id)) {
-                    offlineTimes.set(id, Date.now());
-                    wasOnline.delete(id);
+                    seenOnlineSet.add(user.id);
+                    lastSeenMap.delete(user.id);
+                } else if (seenOnlineSet.has(user.id)) {
+                    lastSeenMap.set(user.id, Date.now());
+                    seenOnlineSet.delete(user.id);
                 }
             }
-        }
+        },
     },
 
     start() {
-        addMemberListDecorator("LastOnlineTracker", (p: any) => <Pill user={p.user} />);
-        addContextMenuPatch("user-context", menuPatch);
-        addContextMenuPatch("gdm-context", menuPatch);
+        // Right-side member list decorator — confirmed working
+        addMemberListDecorator("LastOnlineTracker", props => {
+            const user = (props as any).user;
+            if (!user?.id || !isOffline(user.id)) return null;
+            const ts = lastSeenMap.get(user.id);
+            if (!ts) return null;
+            return (
+                <span style={{ fontSize: "11px", color: "var(--text-muted)", userSelect: "none" }}>
+                    {ago(Date.now() - ts)}
+                </span>
+            );
+        });
+
+        addContextMenuPatch("user-context", ctxPatch);
+        addContextMenuPatch("gdm-context", ctxPatch);
     },
 
     stop() {
         removeMemberListDecorator("LastOnlineTracker");
-        removeContextMenuPatch("user-context", menuPatch);
-        removeContextMenuPatch("gdm-context", menuPatch);
-        offlineTimes.clear();
-        wasOnline.clear();
-    }
+        removeContextMenuPatch("user-context", ctxPatch);
+        removeContextMenuPatch("gdm-context", ctxPatch);
+        lastSeenMap.clear();
+        seenOnlineSet.clear();
+    },
 });
