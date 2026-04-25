@@ -76,7 +76,7 @@ const ctxPatch = (_navId: string, children: any[], props: any) => {
 export default definePlugin({
     name: "LastOnlineTracker",
     description: "Shows 'Active X ago' below usernames in the DM list, matching Discord's own style. Resets on restart.",
-    authors: [{ name: "You", id: 0n }],
+    authors: [{ name: "k1ng_op", id: 641266820187160576 }],
     dependencies: ["MemberListDecoratorsAPI", "ContextMenuAPI"],
 
     patches: [
