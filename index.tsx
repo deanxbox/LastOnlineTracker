@@ -32,7 +32,7 @@ function isOffline(userId: string): boolean {
     catch { return true; }
 }
 
-// Matches Discord's "Active X ago" style exactly
+// Matches Discord's own "Active X ago" style exactly
 const subStyle: React.CSSProperties = {
     display: "block", fontSize: "12px", fontWeight: 400,
     lineHeight: "16px", color: "var(--text-muted)",
@@ -75,42 +75,42 @@ const ctxPatch = (_navId: string, children: any[], props: any) => {
 
 export default definePlugin({
     name: "LastOnlineTracker",
-    description: "Shows 'Active X ago' below usernames in DM list, matching Discord's style exactly. Resets on restart.",
+    description: "Shows 'Active X ago' below usernames in the DM list, matching Discord's own style. Resets on restart.",
     authors: [{ name: "k1ng_op", id: 641266820187160576 }],
     dependencies: ["MemberListDecoratorsAPI", "ContextMenuAPI"],
 
     patches: [
         // ── DM list left sidebar (module 696157) ─────────────────────────────
-        // `t` = the channel object. `t.recipients[0]` = the other user's ID.
-        // We capture the full original ternary expression for `subText` so we
-        // can fall back to it for system DMs and group DMs.
+        // `a` = Discord user object (confirmed: a.username, a.isSystemUser() in same scope)
+        // `t` = Discord channel object (confirmed: t.isSystemDM(), t.isMultiUserDM())
+        //
+        // KEY TRICK: ?? has LOWER precedence than ?:
+        // So: `our_val ?? t.isSystemDM() ? X : Y`
+        // parses as: `our_val ?? (t.isSystemDM() ? X : Y)`
+        //
+        // When our function returns null  → falls through to Discord's full ternary ✓
+        // When our function returns JSX   → uses our element as subText ✓
+        // No need to match the end of the ternary at all.
         {
             find: "isSystemDM()",
             replacement: {
-                // Captures: $1 = channel variable name (e.g. "t")
-                //           $2 = rest of the ternary after isSystemDM()
-                // Stops at ,highlighted: which always follows subText in this component.
-                match: /subText:(\w+)\.isSystemDM\(\)([\s\S]+?),highlighted:/,
-                replace: "subText:$self.dmSubtext($1,$1.isSystemDM()$2),highlighted:",
+                match: /(subText:)(t\.isSystemDM\(\))/,
+                replace: "$1$self.dmSubtext(a)??$2",
             },
             optional: true,
         },
     ],
 
-    // channel    = the Discord channel object (has .recipients[], .isSystemDM(), .isGroupDM())
-    // original   = the evaluated result of Discord's own subText expression
-    dmSubtext(channel: any, original: React.ReactNode): React.ReactNode {
-        // For system DMs or group DMs, keep Discord's own text
-        if (!channel || channel.isSystemDM?.() || channel.isGroupDM?.()) return original ?? null;
+    // `user` = Discord user object (`a` in the compiled code)
+    // Returns our JSX if we have data, or null to fall through to Discord's subtext.
+    dmSubtext(user: any): React.ReactNode {
+        const userId: string | undefined = user?.id;
+        if (!userId) return null;
 
-        const userId: string = channel.recipients?.[0];
-        if (!userId) return original ?? null;
-
-        // User is currently online — Discord's own "Active X ago" takes over
-        if (!isOffline(userId)) return original ?? null;
+        // User is currently online/idle/dnd — Discord's own "Active X ago" handles it
+        if (!isOffline(userId)) return null;
 
         const ts = lastSeenMap.get(userId);
-        // Not tracked yet this session — show nothing rather than Discord's stale text
         if (!ts) return null;
 
         return <LastSeenText key="lot-dm" userId={userId} />;
