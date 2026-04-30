@@ -5,17 +5,16 @@
  */
 
 import definePlugin from "@utils/types";
-import { React, Menu } from "@webpack/common";
+import { React } from "@webpack/common";
 import { findByPropsLazy } from "@webpack";
 import { addContextMenuPatch, removeContextMenuPatch, findGroupChildrenByChildId } from "@api/ContextMenu";
 import { addMemberListDecorator, removeMemberListDecorator } from "@api/MemberListDecorators";
+import { Menu } from "@webpack/common";
 
 const PresenceStore = findByPropsLazy("getStatus", "getActivities");
 
 const lastSeenMap   = new Map<string, number>();
 const seenOnlineSet = new Set<string>();
-
-const decoratorStyle = { fontSize: "11px", color: "var(--text-muted)", userSelect: "none" } as const;
 
 function ago(ms: number): string {
     const s = Math.floor(ms / 1000);
@@ -33,7 +32,6 @@ function isOffline(userId: string): boolean {
     catch { return true; }
 }
 
-// Matches Discord's own "Active X ago" style exactly
 const subStyle: React.CSSProperties = {
     display: "block", fontSize: "12px", fontWeight: 400,
     lineHeight: "16px", color: "var(--text-muted)",
@@ -53,7 +51,6 @@ function LastSeenText({ userId }: { userId: string; }) {
     return <span style={subStyle}>Active {ago(Date.now() - ts)}</span>;
 }
 
-// ─── Context menu ─────────────────────────────────────────────────────────────
 const ctxPatch = (_navId: string, children: any[], props: any) => {
     const userId: string | undefined = props?.user?.id ?? props?.guildMember?.userId;
     if (!userId || !isOffline(userId)) return;
@@ -74,36 +71,77 @@ const ctxPatch = (_navId: string, children: any[], props: any) => {
     );
 };
 
+const decoratorStyle: React.CSSProperties = {
+    fontSize: "11px", color: "var(--text-muted)", userSelect: "none",
+};
+
 export default definePlugin({
     name: "LastOnlineTracker",
-    description: "Shows 'Active X ago' below usernames in the DM list, matching Discord's own style. Resets on restart.",
+    description: "Shows 'Active X ago' below usernames in the DM list. Resets on restart.",
     authors: [{ name: "k1ng_op", id: 641266820187160576 }],
     dependencies: ["MemberListDecoratorsAPI", "ContextMenuAPI"],
 
     patches: [
+        // ── DM list left sidebar ──────────────────────────────────────────────
+        // Confirmed from console:
+        //   r = user object  (r.isSystemUser(), r.username, r.id)
+        //   t = channel object (t.isSystemDM(), t.isMultiUserDM())
+        //
+        // THE BUG WE FIXED:
+        //   ?? has HIGHER precedence than ?:
+        //   So:  dmSubtext(r) ?? t.isSystemDM() ? A : B
+        //   Parses as: (dmSubtext(r) ?? t.isSystemDM()) ? A : B
+        //   When our fn returns JSX (truthy): JSX ? A : B = A = "Official Discord Message" ← WRONG
+        //
+        // THE FIX:
+        //   Capture the ENTIRE original subText expression (up to ,highlighted:)
+        //   and pass it as a lazy thunk: () => originalExpr
+        //   Our function calls getOriginal() only when it has no data.
+        //   When it has data it returns our JSX directly — no ternary involved.
         {
             find: '"PrivateChannel"',
             replacement: {
-                match: /(subText:)(t\.isSystemDM\(\))/,
-                replace: "$1$self.dmSubtext(r)??$2",
+                // Captures the full Discord subText expression from t.isSystemDM()
+                // all the way to the next prop ,highlighted: using lazy matching.
+                // The full expression is passed as a thunk so it only evaluates
+                // when we actually need it (saves work + avoids side effects).
+                match: /,subText:(t\.isSystemDM\(\)[\s\S]*?),highlighted:/,
+                replace: (_, expr) =>
+                    `,subText:$self.dmSubtext(r,()=>(${expr})),highlighted:`,
             },
             optional: true,
         },
     ],
 
-    // `user` = Discord user object (`r` in the compiled code)
-    // Returns our JSX if we have data, or null to fall through to Discord's subtext.
-    dmSubtext(user: any): React.ReactNode {
+    // user       = `r` in compiled code = Discord user object
+    // getOriginal = thunk that evaluates Discord's full subText expression
+    //               (system DM label / group size / activity status / null)
+    dmSubtext(user: any, getOriginal: () => React.ReactNode): React.ReactNode {
         const userId: string | undefined = user?.id;
-        if (!userId) return null;
 
-        // User is currently online/idle/dnd — Discord's own "Active X ago" handles it
-        if (!isOffline(userId)) return null;
+        // No userId, or user is online/idle/dnd → show Discord's own subtext
+        if (!userId || !isOffline(userId)) return getOriginal();
 
         const ts = lastSeenMap.get(userId);
-        if (!ts) return null;
 
+        // Not tracked yet → show Discord's own subtext (nothing for offline users)
+        if (!ts) return getOriginal();
+
+        // We have data → return our element directly, no ternary involved
         return <LastSeenText key="lot-dm" userId={userId} />;
+    },
+
+    getTracked() {
+        const out: Record<string, string> = {};
+        lastSeenMap.forEach((ts, id) => { out[id] = ago(Date.now() - ts); });
+        console.table(out);
+        return out;
+    },
+
+    __test(userId: string) {
+        seenOnlineSet.add(userId);
+        lastSeenMap.set(userId, Date.now() - 5 * 60 * 1000);
+        console.log(`[LastOnlineTracker] Injected test data for ${userId} — scroll the DM list to re-render`);
     },
 
     flux: {
@@ -131,19 +169,13 @@ export default definePlugin({
     },
 
     start() {
-        // Right-side member list decorator — confirmed working
         addMemberListDecorator("LastOnlineTracker", props => {
             const user = (props as any).user;
             if (!user?.id || !isOffline(user.id)) return null;
             const ts = lastSeenMap.get(user.id);
             if (!ts) return null;
-            return (
-                <span style={decoratorStyle}>
-                    {ago(Date.now() - ts)}
-                </span>
-            );
+            return <span style={decoratorStyle}>{ago(Date.now() - ts)}</span>;
         });
-
         addContextMenuPatch("user-context", ctxPatch);
         addContextMenuPatch("gdm-context", ctxPatch);
     },
