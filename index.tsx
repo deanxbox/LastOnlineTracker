@@ -5,16 +5,17 @@
  */
 
 import definePlugin from "@utils/types";
-import { React } from "@webpack/common";
+import { React, Menu } from "@webpack/common";
 import { findByPropsLazy } from "@webpack";
 import { addContextMenuPatch, removeContextMenuPatch, findGroupChildrenByChildId } from "@api/ContextMenu";
 import { addMemberListDecorator, removeMemberListDecorator } from "@api/MemberListDecorators";
-import { Menu } from "@webpack/common";
 
 const PresenceStore = findByPropsLazy("getStatus", "getActivities");
 
 const lastSeenMap   = new Map<string, number>();
 const seenOnlineSet = new Set<string>();
+
+const decoratorStyle = { fontSize: "11px", color: "var(--text-muted)", userSelect: "none" } as const;
 
 function ago(ms: number): string {
     const s = Math.floor(ms / 1000);
@@ -80,28 +81,17 @@ export default definePlugin({
     dependencies: ["MemberListDecoratorsAPI", "ContextMenuAPI"],
 
     patches: [
-        // ── DM list left sidebar (module 696157) ─────────────────────────────
-        // `a` = Discord user object (confirmed: a.username, a.isSystemUser() in same scope)
-        // `t` = Discord channel object (confirmed: t.isSystemDM(), t.isMultiUserDM())
-        //
-        // KEY TRICK: ?? has LOWER precedence than ?:
-        // So: `our_val ?? t.isSystemDM() ? X : Y`
-        // parses as: `our_val ?? (t.isSystemDM() ? X : Y)`
-        //
-        // When our function returns null  → falls through to Discord's full ternary ✓
-        // When our function returns JSX   → uses our element as subText ✓
-        // No need to match the end of the ternary at all.
         {
-            find: "isSystemDM()",
+            find: '"PrivateChannel"',
             replacement: {
                 match: /(subText:)(t\.isSystemDM\(\))/,
-                replace: "$1$self.dmSubtext(a)??$2",
+                replace: "$1$self.dmSubtext(r)??$2",
             },
             optional: true,
         },
     ],
 
-    // `user` = Discord user object (`a` in the compiled code)
+    // `user` = Discord user object (`r` in the compiled code)
     // Returns our JSX if we have data, or null to fall through to Discord's subtext.
     dmSubtext(user: any): React.ReactNode {
         const userId: string | undefined = user?.id;
@@ -148,7 +138,7 @@ export default definePlugin({
             const ts = lastSeenMap.get(user.id);
             if (!ts) return null;
             return (
-                <span style={{ fontSize: "11px", color: "var(--text-muted)", userSelect: "none" }}>
+                <span style={decoratorStyle}>
                     {ago(Date.now() - ts)}
                 </span>
             );
