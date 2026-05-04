@@ -4,16 +4,15 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-import definePlugin from "@utils/types";
-import { React } from "@webpack/common";
-import { findByPropsLazy } from "@webpack";
-import { addContextMenuPatch, removeContextMenuPatch, findGroupChildrenByChildId } from "@api/ContextMenu";
+import { addContextMenuPatch, findGroupChildrenByChildId, removeContextMenuPatch } from "@api/ContextMenu";
 import { addMemberListDecorator, removeMemberListDecorator } from "@api/MemberListDecorators";
-import { Menu } from "@webpack/common";
+import definePlugin from "@utils/types";
+import { findByPropsLazy } from "@webpack";
+import { Menu, React } from "@webpack/common";
 
 const PresenceStore = findByPropsLazy("getStatus", "getActivities");
 
-const lastSeenMap   = new Map<string, number>();
+const lastSeenMap = new Map<string, number>();
 const seenOnlineSet = new Set<string>();
 
 function ago(ms: number): string {
@@ -51,7 +50,7 @@ function LastSeenText({ userId }: { userId: string; }) {
     return <span style={subStyle}>Active {ago(Date.now() - ts)}</span>;
 }
 
-const ctxPatch = (_navId: string, children: any[], props: any) => {
+const ctxPatch = (children: any[], props: any) => {
     const userId: string | undefined = props?.user?.id ?? props?.guildMember?.userId;
     if (!userId || !isOffline(userId)) return;
     const ts = lastSeenMap.get(userId);
@@ -78,7 +77,7 @@ const decoratorStyle: React.CSSProperties = {
 export default definePlugin({
     name: "LastOnlineTracker",
     description: "Shows 'Active X ago' below usernames in the DM list. Resets on restart.",
-    authors: [{ name: "k1ng_op", id: 641266820187160576 }],
+    authors: [{ name: "k1ng_op", id: 641266820187160576n }],
     dependencies: ["MemberListDecoratorsAPI", "ContextMenuAPI"],
 
     patches: [
@@ -109,7 +108,6 @@ export default definePlugin({
                 replace: (_, expr) =>
                     `,subText:$self.dmSubtext(r,()=>(${expr})),highlighted:`,
             },
-            optional: true,
         },
     ],
 
@@ -147,8 +145,8 @@ export default definePlugin({
     flux: {
         PRESENCE_UPDATES({ updates }: {
             updates?: Array<{
-                user:          { id: string };
-                status:        string;
+                user: { id: string };
+                status: string;
                 clientStatus?: Record<string, string>;
             }>;
         }) {
@@ -170,7 +168,7 @@ export default definePlugin({
 
     start() {
         addMemberListDecorator("LastOnlineTracker", props => {
-            const user = (props as any).user;
+            const { user } = (props as any);
             if (!user?.id || !isOffline(user.id)) return null;
             const ts = lastSeenMap.get(user.id);
             if (!ts) return null;
